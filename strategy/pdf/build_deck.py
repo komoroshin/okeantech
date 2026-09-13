@@ -56,7 +56,7 @@ def render_body(body):
             section = ln[2:].strip(); i += 1; continue
         if ln.startswith("### "):
             head = ln[4:].strip(); i += 1; buf = []
-            while i < len(lines) and not lines[i].startswith("### "):
+            while i < len(lines) and not lines[i].startswith("### ") and not lines[i].startswith("Вывод:"):
                 if lines[i].strip() and lines[i].strip() != "---":
                     buf.append(f"<p>{inline(lines[i].strip())}</p>")
                 i += 1
