@@ -1,12 +1,15 @@
-"""Собирает deck-v6-text.md в чёрно-белый PDF 16:9 через Chromium.
-Запуск: python3 strategy/pdf/build_deck.py
+"""Собирает markdown-деку в чёрно-белый PDF 16:9 через Chromium.
+Запуск: python3 strategy/pdf/build_deck.py [deck-v7-text.md]
+Обозначения в markdown: `§ РАЗДЕЛ` метка в углу; `### Заголовок` колонка;
+`Вывод:` строка внизу; `_курсив_` сноска; таблица с пустой первой строкой без шапки.
 """
-import re, html, subprocess, pathlib, shutil
+import re, html, subprocess, pathlib, shutil, sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-SRC = ROOT / "deck-v6-text.md"
-OUT_HTML = ROOT / "pdf" / "deck-v6.html"
-OUT_PDF = ROOT / "pdf" / "deck-v6-bw.pdf"
+SRC = ROOT / (sys.argv[1] if len(sys.argv) > 1 else "deck-v7-text.md")
+STEM = SRC.stem.replace("-text", "")
+OUT_HTML = ROOT / "pdf" / f"{STEM}.html"
+OUT_PDF = ROOT / "pdf" / f"{STEM}-bw.pdf"
 
 text = SRC.read_text(encoding="utf-8")
 parts = re.split(r"\n## ", "\n" + text)
@@ -23,15 +26,42 @@ def inline(s):
     s = re.sub(r"`(.+?)`", r"\1", s)
     return s
 
+NOWRAP = {"Деньги", "Годовая выручка (ARR)", "Атрибут", "Направление", "Этап", "Бизнес", "Компания", "Модель"}
+
+def render_table(rows):
+    headerless = all(c == "" for c in rows[0])
+    if headerless:
+        rows = rows[1:]
+    nowrap = set() if headerless else {j for j, h in enumerate(rows[0]) if h in NOWRAP}
+    t = ['<table class="%s">' % ("labels" if headerless else "grid")]
+    for r_i, r in enumerate(rows):
+        tag = "td" if headerless or r_i else "th"
+        cells = []
+        for j, c in enumerate(r):
+            attr = ' style="white-space:nowrap"' if j in nowrap else ""
+            cells.append(f"<{tag}{attr}>{inline(c)}</{tag}>")
+        t.append("<tr>" + "".join(cells) + "</tr>")
+    t.append("</table>")
+    return "".join(t)
+
 def render_body(body):
-    out, lines = [], body.split("\n")
+    out, notes, cols, section = [], [], [], ""
+    lines = body.split("\n")
     i = 0
     while i < len(lines):
         ln = lines[i].rstrip()
-        if not ln or ln == "---":
+        if not ln or ln == "---" or ln.startswith(">"):
             i += 1; continue
-        if ln.startswith(">"):  # внутренняя заметка, в PDF не идёт
-            i += 1; continue
+        if ln.startswith("§ "):
+            section = ln[2:].strip(); i += 1; continue
+        if ln.startswith("### "):
+            head = ln[4:].strip(); i += 1; buf = []
+            while i < len(lines) and not lines[i].startswith("### "):
+                if lines[i].strip() and lines[i].strip() != "---":
+                    buf.append(f"<p>{inline(lines[i].strip())}</p>")
+                i += 1
+            cols.append(f'<div class="col"><h2>{inline(head)}</h2>{"".join(buf)}</div>')
+            continue
         if ln.startswith("|"):
             rows = []
             while i < len(lines) and lines[i].startswith("|"):
@@ -39,17 +69,7 @@ def render_body(body):
                 if not all(re.fullmatch(r"-+", c) for c in cells):
                     rows.append(cells)
                 i += 1
-            t = ["<table>"]
-            nowrap = {j for j, h in enumerate(rows[0]) if h in ("Деньги", "Годовая выручка (ARR)", "Атрибут", "Направление", "Этап")}
-            for r_i, r in enumerate(rows):
-                tag = "th" if r_i == 0 else "td"
-                cells = []
-                for j, c in enumerate(r):
-                    attr = ' style="white-space:nowrap"' if j in nowrap else ''
-                    cells.append(f"<{tag}{attr}>{inline(c)}</{tag}>")
-                t.append("<tr>" + "".join(cells) + "</tr>")
-            t.append("</table>")
-            out.append("".join(t)); continue
+            out.append(render_table(rows)); continue
         if ln.startswith("- "):
             items = []
             while i < len(lines) and lines[i].startswith("- "):
@@ -58,8 +78,14 @@ def render_body(body):
         if ln.startswith("Вывод:"):
             t = ln[len("Вывод:"):].strip(); t = t[:1].upper() + t[1:]
             out.append(f'<p class="takeaway">{inline(t)}</p>'); i += 1; continue
+        if re.fullmatch(r"_.+_", ln):
+            notes.append(f'<p class="note">{inline(ln[1:-1])}</p>'); i += 1; continue
+        if re.fullmatch(r"\*\*.+\*\*", ln):
+            out.append(f'<p class="lead">{inline(ln[2:-2])}</p>'); i += 1; continue
         out.append(f"<p>{inline(ln)}</p>"); i += 1
-    return "\n".join(out)
+    if cols:
+        out.insert(0, '<div class="cols">' + "".join(cols) + "</div>")
+    return "\n".join(out), "".join(notes), section
 
 CSS = """
 @page { size: 338.67mm 190.5mm; margin: 0; }
@@ -69,46 +95,50 @@ html, body { margin: 0; padding: 0; background: #fff; color: #000;
 .slide { width: 338.67mm; height: 190.5mm; padding: 16mm 22mm 22mm 22mm; page-break-after: always;
   display: flex; flex-direction: column; position: relative; }
 .slide:last-child { page-break-after: auto; }
-.num { position: absolute; right: 22mm; bottom: 9mm; font-size: 10pt; color: #000; }
+.num { position: absolute; right: 22mm; bottom: 9mm; font-size: 10pt; }
 .brand { position: absolute; left: 22mm; bottom: 9mm; font-size: 10pt; letter-spacing: .12em; }
-h1 { font-size: 38pt; font-weight: 700; margin: 0 0 9mm 0; line-height: 1.15; }
-.body { flex: 1; display: flex; flex-direction: column; font-size: 20pt; line-height: 1.35; }
-.body p { margin: 0 0 4mm 0; }
+.section { position: absolute; right: 22mm; top: 9mm; font-size: 10pt; letter-spacing: .12em; }
+h1 { font-size: 36pt; font-weight: 700; margin: 0 0 9mm 0; line-height: 1.15; }
+.body { flex: 1; display: flex; flex-direction: column; font-size: 19pt; line-height: 1.35; }
+.body p { margin: 0 0 4.5mm 0; }
+.body p.lead { font-weight: 700; font-size: 21pt; margin-bottom: 6mm; }
 .body ul { margin: 0 0 4mm 0; padding-left: 7mm; }
 .body li { margin: 0 0 3.5mm 0; }
+.cols { display: flex; gap: 12mm; margin-top: 4mm; }
+.col { flex: 1; }
+.col h2 { font-size: 22pt; margin: 0 0 6mm 0; }
+.col p { font-size: 19pt; }
 table { border-collapse: collapse; width: 100%; margin: 0 0 5mm 0; font-size: 17pt; }
 th, td { border: 0.4pt solid #000; padding: 2mm 3.5mm; text-align: left; vertical-align: top; }
 th { font-weight: 700; background: #000; color: #fff; }
-.takeaway { margin-top: auto; padding-top: 5mm; border-top: 1.2pt solid #000; font-size: 20pt; font-weight: 700; }
-.title .body { display: flex; flex-direction: column; justify-content: center; }
+table.labels td { border: 0; border-bottom: 0.4pt solid #000; padding: 3mm 4mm 3mm 0; }
+table.labels td:first-child { width: 28%; white-space: normal; }
+.takeaway { margin-top: auto; padding-top: 5mm; border-top: 1.2pt solid #000; font-size: 19pt; font-weight: 700; }
+.note { font-size: 11pt; margin: 2mm 0 0 0; color: #000; }
+.title .body { justify-content: center; }
 .title .wif { font-size: 96pt; font-weight: 700; letter-spacing: .04em; line-height: 1; margin: 0 0 8mm 0; }
 .title .desc { font-size: 26pt; margin: 0 0 12mm 0; }
 .title .sub { font-size: 16pt; margin: 0 0 3mm 0; }
-.title .sub.small { font-size: 13pt; }
 """
 
 pages = []
 for idx, (title, body) in enumerate(slides, 1):
     m = re.match(r"(\d+)\.\s+(.*)", title)
     if m and m.group(1) == "1":
-        # титул собираем отдельно
-        lines = [l for l in body.split("\n") if l.strip()]
+        lines = [l for l in body.split("\n") if l.strip() and l != "---"]
         name = re.sub(r"\*\*", "", lines[0])
-        desc, trio, ask, org = lines[1], lines[2], lines[3], lines[4]
+        subs = "".join(f'<div class="sub">{inline(l)}</div>' for l in lines[2:])
         pages.append(f'''<section class="slide title"><div class="body">
-<div class="wif">{inline(name)}</div>
-<div class="desc">{inline(desc)}</div>
-<div class="sub">{inline(trio)}</div>
-<div class="sub">{inline(ask)}</div>
-<div class="sub small">{inline(org)}</div>
+<div class="wif">{inline(name)}</div><div class="desc">{inline(lines[1])}</div>{subs}
 </div></section>''')
         continue
     heading = m.group(2) if m else title
-    pages.append(f'''<section class="slide"><h1>{inline(heading)}</h1>
-<div class="body">{render_body(body)}</div>
+    content, notes, section = render_body(body)
+    pages.append(f'''<section class="slide"><div class="section">{inline(section)}</div><h1>{inline(heading)}</h1>
+<div class="body">{content}{notes}</div>
 <div class="brand">WIF</div><div class="num">{idx}</div></section>''')
 
-OUT_HTML.write_text(f"<!doctype html><html lang='ru'><head><meta charset='utf-8'><title>WIF deck v6</title><style>{CSS}</style></head><body>{''.join(pages)}</body></html>", encoding="utf-8")
+OUT_HTML.write_text(f"<!doctype html><html lang='ru'><head><meta charset='utf-8'><title>{STEM}</title><style>{CSS}</style></head><body>{''.join(pages)}</body></html>", encoding="utf-8")
 
 chrome = shutil.which("chromium") or "/opt/pw-browsers/chromium-1194/chrome-linux/chrome"
 subprocess.run([chrome, "--headless=new", "--no-sandbox", "--disable-gpu", "--no-pdf-header-footer",
