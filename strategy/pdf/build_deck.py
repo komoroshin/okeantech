@@ -96,7 +96,7 @@ CSS = """
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; background: #fff; color: #000;
   font-family: "Liberation Sans", Arial, Helvetica, sans-serif; }
-.slide { width: 338.67mm; height: 190.5mm; padding: 16mm 22mm 22mm 22mm; page-break-after: always;
+.slide { width: 338.67mm; height: 190.5mm; padding: 15mm 22mm 24mm 22mm; page-break-after: always; overflow: hidden;
   display: flex; flex-direction: column; position: relative; }
 .slide:last-child { page-break-after: auto; }
 .num { position: absolute; right: 22mm; bottom: 9mm; font-size: 10pt; }
@@ -116,7 +116,7 @@ h1 { font-size: 36pt; font-weight: 700; margin: 0 0 9mm 0; line-height: 1.15; }
 table { border-collapse: collapse; width: 100%; margin: 0 0 5mm 0; font-size: 17pt; }
 th, td { border: 0.4pt solid #000; padding: 2mm 3.5mm; text-align: left; vertical-align: top; }
 th { font-weight: 700; background: #000; color: #fff; }
-table.labels td { border: 0; border-bottom: 0.4pt solid #000; padding: 3mm 4mm 3mm 0; }
+table.labels td { border: 0; border-bottom: 0.4pt solid #000; padding: 2.5mm 4mm 2.5mm 0; }
 table.labels td:first-child { width: 28%; white-space: normal; }
 .takeaway { margin-top: auto; padding-top: 5mm; border-top: 1.2pt solid #000; font-size: 19pt; font-weight: 700; }
 .note { font-size: 11pt; margin: 2mm 0 0 0; color: #000; }
@@ -149,3 +149,22 @@ chrome = shutil.which("chromium") or "/opt/pw-browsers/chromium-1194/chrome-linu
 subprocess.run([chrome, "--headless=new", "--no-sandbox", "--disable-gpu", "--no-pdf-header-footer",
                 f"--print-to-pdf={OUT_PDF}", OUT_HTML.as_uri()], check=True, capture_output=True)
 print("ok", OUT_PDF, OUT_PDF.stat().st_size)
+
+# Проверка переполнения: текст ниже линии подвала (кроме самого подвала) означает, что слайд не влез.
+try:
+    import pymupdf
+    doc = pymupdf.open(str(OUT_PDF))
+    bad = []
+    for i, page in enumerate(doc, 1):
+        h = page.rect.height
+        for b in page.get_text("blocks"):
+            x0, y0, x1, y1, txt = b[0], b[1], b[2], b[3], b[4].strip()
+            if y1 > h - 32 and txt.replace("\n", " ").split() not in (["WIF"], [str(i)], ["WIF", str(i)]):
+                bad.append((i, txt[:60]))
+    if bad:
+        print("ПЕРЕПОЛНЕНИЕ на слайдах:", sorted(set(n for n, _ in bad)))
+        for n, t in bad: print(f"  {n}: {t}")
+    else:
+        print("переполнений нет")
+except Exception as e:
+    print("проверка переполнения не выполнена:", e)
