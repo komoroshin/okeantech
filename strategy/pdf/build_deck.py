@@ -16,7 +16,7 @@ parts = re.split(r"\n## ", "\n" + text)
 slides = []
 for p in parts[1:]:
     title, _, body = p.partition("\n")
-    if title.startswith("Что не вошло"):
+    if title.startswith("Что не вошло") or title.startswith("Что изменено"):
         continue
     slides.append((title.strip(), body.strip()))
 
