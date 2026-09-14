@@ -1,6 +1,6 @@
 """Собирает markdown-деку в чёрно-белый PDF 16:9 через Chromium.
 Запуск: python3 strategy/pdf/build_deck.py [deck-v7-text.md]
-Обозначения в markdown: `§ РАЗДЕЛ` метка в углу; `### Заголовок` колонка;
+Обозначения в markdown: `§ РАЗДЕЛ` метка в углу; `### Заголовок` колонка; `cols: arrows` стрелки между колонками;
 `Вывод:` строка внизу; `_курсив_` сноска; таблица с пустой первой строкой без шапки.
 """
 import re, html, subprocess, pathlib, shutil, sys
@@ -46,6 +46,7 @@ def render_table(rows):
 
 def render_body(body):
     out, notes, cols, section = [], [], [], ""
+    arrows = False
     lines = body.split("\n")
     i = 0
     while i < len(lines):
@@ -54,6 +55,8 @@ def render_body(body):
             i += 1; continue
         if ln.startswith("§ "):
             section = ln[2:].strip(); i += 1; continue
+        if ln.strip() == "cols: arrows":
+            arrows = True; i += 1; continue
         if ln.startswith("### "):
             head = ln[4:].strip(); i += 1; buf = []
             while i < len(lines) and not lines[i].startswith("### ") and not lines[i].startswith("Вывод:"):
@@ -84,7 +87,8 @@ def render_body(body):
             out.append(f'<p class="lead">{inline(ln[2:-2])}</p>'); i += 1; continue
         out.append(f"<p>{inline(ln)}</p>"); i += 1
     if cols:
-        out.insert(0, '<div class="cols">' + "".join(cols) + "</div>")
+        sep = '<div class="arrow">→</div>' if arrows else ""
+        out.insert(0, '<div class="cols">' + sep.join(cols) + "</div>")
     return "\n".join(out), "".join(notes), section
 
 CSS = """
@@ -106,6 +110,7 @@ h1 { font-size: 36pt; font-weight: 700; margin: 0 0 9mm 0; line-height: 1.15; }
 .body li { margin: 0 0 3.5mm 0; }
 .cols { display: flex; gap: 12mm; margin-top: 4mm; }
 .col { flex: 1; }
+.arrow { flex: 0 0 auto; align-self: flex-start; margin-top: 14mm; font-size: 40pt; line-height: 1; font-weight: 700; }
 .col h2 { font-size: 22pt; margin: 0 0 6mm 0; }
 .col p { font-size: 19pt; }
 table { border-collapse: collapse; width: 100%; margin: 0 0 5mm 0; font-size: 17pt; }
