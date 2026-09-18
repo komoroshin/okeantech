@@ -309,15 +309,15 @@ Takeaway: one shared WIF technology platform.
 
 ---
 
-## 16. The people behind WIF: Okean Tech
+## 16. The people behind WIF: Ocean Tech
 
-**60+ employees at Okean Tech: researchers, engineers and product designers**
+**60+ employees at Ocean Tech: researchers, engineers and product designers**
 
 | | |
 |---|---|
 | Research | Behaviour of models and autonomous agents on real business tasks. |
 | Engineering | Enterprise deployments, integrations, high-load services and Web3. |
-| Okean Framework | Multi-agent architecture, memory, monitoring and access control. |
+| Ocean Framework | Multi-agent architecture, memory, monitoring and access control. |
 
 ---
 
@@ -349,7 +349,7 @@ _Visual slide: the original carries only the title._
 
 ---
 
-## 19. The Okean Tech virtual office
+## 19. The Ocean Tech virtual office
 
 _Visual slide: the original carries only the title._
 
