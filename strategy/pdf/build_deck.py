@@ -59,7 +59,7 @@ def render_body(body):
             arrows = True; i += 1; continue
         if ln.startswith("### "):
             head = ln[4:].strip(); i += 1; buf = []
-            while i < len(lines) and not lines[i].startswith("### ") and not lines[i].startswith("Вывод:"):
+            while i < len(lines) and not lines[i].startswith("### ") and not lines[i].startswith("Вывод:") and not lines[i].startswith("Takeaway:"):
                 if lines[i].strip() and lines[i].strip() != "---":
                     buf.append(f"<p>{inline(lines[i].strip())}</p>")
                 i += 1
@@ -78,8 +78,8 @@ def render_body(body):
             while i < len(lines) and lines[i].startswith("- "):
                 items.append(f"<li>{inline(lines[i][2:])}</li>"); i += 1
             out.append("<ul>" + "".join(items) + "</ul>"); continue
-        if ln.startswith("Вывод:"):
-            t = ln[len("Вывод:"):].strip(); t = t[:1].upper() + t[1:]
+        if ln.startswith("Вывод:") or ln.startswith("Takeaway:"):
+            t = ln.split(":", 1)[1].strip(); t = t[:1].upper() + t[1:]
             out.append(f'<p class="takeaway">{inline(t)}</p>'); i += 1; continue
         if re.fullmatch(r"_.+_", ln):
             notes.append(f'<p class="note">{inline(ln[1:-1])}</p>'); i += 1; continue
