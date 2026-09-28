@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
-"""Собирает finmodel-wif.xlsx из того же движка, что и finmodel-wif.md.
+"""Собирает finmodel-wif.xlsx на 36 месяцев из того же движка, что и finmodel-wif.md.
 
-В книге живые формулы: меняешь рычаг или траекторию клиентов — пересчитывается
-всё остальное, включая проверки на сходимость со стратегией.
+Листы: Рычаги · Модель (по месяцам) · Годы (отчёт о прибылях) · Оценка · Проверки.
+Синие ячейки правятся руками, чёрные — формулы, зелёные — ссылки на другой лист,
+жёлтая заливка — допущения, которых нет в стратегии.
 
-Синий текст — то, что правится руками. Чёрный — формулы. Жёлтая заливка —
-ключевые допущения. Запуск: python3 _finmodel_wif_xlsx.py
+Запуск: python3 _finmodel_wif_xlsx.py
+После сборки книгу надо пересчитать (см. README-finmodel.md).
 """
 
 from pathlib import Path
@@ -17,8 +18,9 @@ import _finmodel_wif as M
 
 HERE = Path(__file__).parent
 MON = M.MONTHS
-FIRST = 3           # первая колонка месяца (C)
-COLS = [get_column_letter(FIRST + i) for i in range(MON)]
+FIRST = 3
+COLS = [get_column_letter(FIRST + i) for i in range(MON)]   # C … AL
+YEARS = [(COLS[12 * y], COLS[12 * y + 11]) for y in range(MON // 12)]
 
 FONT = "Arial"
 BLUE = Font(name=FONT, size=10, color="0000FF")
@@ -34,9 +36,9 @@ GREY = PatternFill("solid", fgColor="F2F2F2")
 THIN = Border(bottom=Side(style="thin", color="BFBFBF"))
 
 CUR = '$#,##0;($#,##0);-'
-CUR2 = '$#,##0.0;($#,##0.0);-'
 NUM = '#,##0;(#,##0);-'
 PCT = '0.0%'
+MULT = '0.0"x"'
 
 
 def put(ws, cell, value, font=BLACK, fmt=None, fill=None, align=None):
@@ -48,270 +50,342 @@ def put(ws, cell, value, font=BLACK, fmt=None, fill=None, align=None):
     if fill:
         c.fill = fill
     if align:
-        c.alignment = Alignment(horizontal=align)
+        c.alignment = Alignment(horizontal=align, wrap_text=False)
     return c
 
 
+def header(ws, cols, labels):
+    for col, name in zip(cols, labels):
+        put(ws, f"{col}4", name, HEAD, fill=DARK, align="center" if col not in "AB" else None)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Рычаги
+# ─────────────────────────────────────────────────────────────────────
+
+LEVERS = [
+    ("ТРУД · ИИ-СОТРУДНИКИ", None, None, None, False),
+    ("labor_churn", "Отток компаний в месяц", PCT, "target-state-18m.md: не выше 1%", False),
+    ("pilot_price", "Цена пилота, $ разово", CUR, "90-day-plan.md: $3–5 тыс.", False),
+    ("ЛИЧНОСТЬ · ПЕРСОНАЖИ", None, None, None, False),
+    ("ident_price", "Цена подписки, $/мес", CUR, "target-state-18m.md", False),
+    ("ident_churn", "Отток подписчиков в месяц", PCT, "target-state-18m.md", False),
+    ("ident_conversion", "Конверсия визита в подписку", PCT, "target-state-18m.md", False),
+    ("brand_check", "Чек сделки с брендом, $", CUR, "target-state-18m.md", False),
+    ("КАПИТАЛ · УЧЁТ РАСХОДОВ НА ИИ", None, None, None, False),
+    ("cap_churn", "Отток компаний в месяц", PCT, "Допущение: в стратегии нет", True),
+    ("КОМАНДА", None, None, None, False),
+    ("fte_cost_year", "Полная стоимость ставки, $/год", CUR, "roles.md: вилка 120–200 тыс.", True),
+    ("hire_cost", "Стоимость найма, $ на человека", CUR, "Допущение: рекрутинг и онбординг", True),
+    ("СЕБЕСТОИМОСТЬ, ДОЛЯ ВЫРУЧКИ", None, None, None, False),
+    ("cogs_labor", "Труд: инференс и проверка работы агента", PCT, "Допущение", True),
+    ("cogs_subs", "Подписка: платформы, хостинг, поддержка", PCT, "Допущение", True),
+    ("cogs_brand", "Бренды: производство под заказ", PCT, "Допущение", True),
+    ("cogs_cap", "Капитал: инфраструктура биллинга", PCT, "Допущение", True),
+    ("ПРИВЛЕЧЕНИЕ", None, None, None, False),
+    ("commission", "Комиссия продажам, доля годового контракта Труда", PCT, "Допущение", True),
+    ("cac_labor", "Маркетинг на одну компанию Труда, $", CUR, "Допущение", True),
+    ("cac_cap", "Маркетинг на одну компанию Капитала, $", CUR, "Допущение", True),
+    ("cost_per_visit", "Стоимость визита в Личности, $", '$0.00', "Допущение — самое непроверенное", True),
+    ("ПОСТОЯННЫЕ, $ В МЕСЯЦ", None, None, None, False),
+    ("content_monthly", "Производство выпусков Личности", CUR, "Допущение", True),
+    ("platform_monthly", "Общая платформа: модели, хостинг, инструменты", CUR, "Допущение", True),
+    ("legal_monthly", "Юрлица США/ЕС, аудит, комплаенс", CUR, "Допущение", True),
+    ("ga_pct", "Офис, поездки, софт — доля ФОТ", PCT, "Допущение", True),
+    ("ДЕНЬГИ", None, None, None, False),
+    ("raise_total", "Раунд, $", CUR, "Дека v10", False),
+    ("ОЦЕНКА — МУЛЬТИПЛИКАТОРЫ", None, None, None, False),
+    ("mult_labor", "Труд, × ARR", MULT, "Допущение: проверить по сделкам-аналогам", True),
+    ("mult_cap", "Капитал, × ARR", MULT, "Допущение", True),
+    ("mult_subs", "Подписка, × ARR", MULT, "Допущение", True),
+    ("mult_brand", "Бренды, × выручки за 12 месяцев", MULT, "Допущение", True),
+]
+
+
 def build_levers(ws):
-    ws.column_dimensions["A"].width = 46
+    ws.column_dimensions["A"].width = 50
     ws.column_dimensions["B"].width = 14
-    ws.column_dimensions["C"].width = 62
-    put(ws, "A1", "Рычаги финмодели WIF", TITLE)
-    put(ws, "A2", "Синим — то, что правится руками. Жёлтым — допущения, которых в стратегии нет "
-                  "и которые первыми надо заменить фактом.", NOTE)
+    ws.column_dimensions["C"].width = 48
+    put(ws, "A1", "Рычаги финмодели WIF · 36 месяцев", TITLE)
+    put(ws, "A2", "Синим — правится руками. Жёлтым — допущения, которых в стратегии нет: их первыми "
+                  "заменить фактом. Поток клиентов, чеки и штат по месяцам — синие строки на листе «Модель».", NOTE)
     for col, name in (("A", "Рычаг"), ("B", "Значение"), ("C", "Откуда")):
         put(ws, f"{col}4", name, HEAD, fill=DARK)
-
-    L = M.BASE
-    rows = [
-        ("ТРУД · ИИ-СОТРУДНИКИ", None, None, False),
-        ("Средний платёж на старте, $/мес", L["labor_arpa_start"], "target-state-18m.md, roles.md: первые контракты от $5 тыс.", False),
-        ("Средний платёж к мес. 18, $/мес", L["labor_arpa_end"], "target-state-18m.md", False),
-        ("Отток компаний в месяц", L["labor_churn"], "target-state-18m.md: не выше 1%", False),
-        ("Цена пилота, $ разово", L["pilot_price"], "90-day-plan.md: $3–5 тыс., оплата вперёд", False),
-        ("Месяц выхода на платящих", 6, "roles.md: мес. 6 — первые контракты $5 тыс./мес", False),
-        ("ЛИЧНОСТЬ · ПЕРСОНАЖИ", None, None, False),
-        ("Цена подписки, $/мес", L["ident_price"], "target-state-18m.md", False),
-        ("Отток подписчиков в месяц", L["ident_churn"], "target-state-18m.md", False),
-        ("Конверсия посетителя в подписку", L["ident_conversion"], "target-state-18m.md", False),
-        ("Средний чек сделки с брендом, $", L["brand_check"], "target-state-18m.md", False),
-        ("КАПИТАЛ · УЧЁТ РАСХОДОВ НА ИИ", None, None, False),
-        ("Средний платёж на старте, $/мес", L["cap_arpa_start"], "Допущение: в стратегии нет. Ориентир — оффер $500–2000/мес из 90-day-plan.md", True),
-        ("Средний платёж к мес. 18, $/мес", L["cap_arpa_end"], "target-state-18m.md", False),
-        ("Отток компаний в месяц", L["cap_churn"], "Допущение: в стратегии нет. Самообслуживание, отток выше, чем в Труде", True),
-        ("КОМАНДА", None, None, False),
-        ("Полная стоимость ставки, $/год", L["fte_cost_year"], "roles.md: вилка $120–200 тыс. Взята середина — допущение", True),
-        ("ДЕНЬГИ", None, None, False),
-        ("Раунд, $", L["raise_total"], "Дека v10, слайд 12", False),
-        ("Этап 1, мес. 1–3, $", L["stages"][0][2], "90-day-plan.md, дека v10 слайд 14", False),
-        ("Этап 2, мес. 4–6, $", L["stages"][1][2], "Дека v10, слайд 14", False),
-        ("Этап 3, мес. 7–12, $", L["stages"][2][2], "Дека v10, слайд 14", False),
-        ("Этап 4, мес. 13–18, $", L["stages"][3][2], "Дека v10, слайд 14", False),
-        ("Резерв, $", L["reserve"], "Дека v10, слайд 14", False),
-    ]
-    r = 5
-    order = []
-    for label, value, src, is_guess in rows:
-        if value is None:
-            put(ws, f"A{r}", label, BOLD, fill=GREY)
-            put(ws, f"B{r}", "", BOLD, fill=GREY)
-            put(ws, f"C{r}", "", BOLD, fill=GREY)
+    ref, r = {}, 5
+    for key, label, fmt, src, guess in LEVERS:
+        if label is None:
+            for col in "ABC":
+                put(ws, f"{col}{r}", key if col == "A" else "", BOLD, fill=GREY)
         else:
-            put(ws, f"A{r}", label, BLACK)
-            fmt = PCT if isinstance(value, float) and value < 1 else CUR if value >= 100 else NUM
-            c = put(ws, f"B{r}", value, BLUE, fmt, YELLOW if is_guess else None, "right")
+            put(ws, f"A{r}", label)
+            put(ws, f"B{r}", M.BASE[key], BLUE, fmt, YELLOW if guess else None, "right").border = THIN
             put(ws, f"C{r}", src, NOTE)
-            order.append((label, f"Рычаги!$B${r}"))
-            c.border = THIN
+            ref[key] = f"Рычаги!$B${r}"
         r += 1
-    return order
+    return ref
 
+
+# ─────────────────────────────────────────────────────────────────────
+# Модель по месяцам
+# ─────────────────────────────────────────────────────────────────────
 
 def build_model(ws, run, ref):
     ws.freeze_panes = "C5"
-    ws.column_dimensions["A"].width = 40
-    ws.column_dimensions["B"].width = 11
+    ws.column_dimensions["A"].width = 42
+    ws.column_dimensions["B"].width = 10
     for col in COLS:
-        ws.column_dimensions[col].width = 10
+        ws.column_dimensions[col].width = 11
 
     put(ws, "A1", "Модель по месяцам · базовый сценарий", TITLE)
-    put(ws, "A2", "Синие строки — вводные: поток новых клиентов (план продаж), визиты, штат, "
-                  "расход. Всё остальное — формулы: база = прошлый месяц − ROUND(прошлый × отток) + новые, "
-                  "все штуки целые. "
-                  "Поменяй поток или отток — пересчитается выручка, касса и проверки.", NOTE)
+    put(ws, "A2", "Синие строки — план: новые клиенты, визиты, сделки, чеки, штат. Остальное — формулы. "
+                  "База = прошлый месяц − ROUND(прошлый × отток) + новые; все штуки целые.", NOTE)
+    for y, (c0, c1) in enumerate(YEARS):
+        put(ws, f"{c0}3", f"Год {y + 1}", BOLD, align="left")
     put(ws, "A4", "Месяц", HEAD, fill=DARK)
-    put(ws, "B4", "Единица", HEAD, fill=DARK)
+    put(ws, "B4", "Ед.", HEAD, fill=DARK)
     for i, col in enumerate(COLS):
         put(ws, f"{col}4", i + 1, HEAD, NUM, DARK, "center")
 
-    rows = {}
-    r = [5]
+    rows, r = {}, [5]
+    prev = lambda i: COLS[i - 1]
 
     def section(title):
-        put(ws, f"A{r[0]}", title, BOLD, fill=GREY)
-        put(ws, f"B{r[0]}", "", BOLD, fill=GREY)
-        for col in COLS:
-            put(ws, f"{col}{r[0]}", "", BOLD, fill=GREY)
+        for col in ["A", "B"] + COLS:
+            put(ws, f"{col}{r[0]}", title if col == "A" else "", BOLD, fill=GREY)
         r[0] += 1
 
-    def line(label, unit, values=None, formula=None, fmt=NUM, key=None, bold=False):
+    def line(key, label, unit, values=None, f=None, fmt=NUM, bold=False):
         row = r[0]
         put(ws, f"A{row}", label, BOLD if bold else BLACK)
         put(ws, f"B{row}", unit, NOTE)
-        for i, col in enumerate(COLS):
+        for i, c in enumerate(COLS):
             m = i + 1
-            if formula:
-                put(ws, f"{col}{row}", formula(m, col, i, row), BLACK, fmt, align="right")
+            if f:
+                put(ws, f"{c}{row}", f(m, c, i, row), BLACK, fmt, align="right")
             else:
-                put(ws, f"{col}{row}", int(values[m]) if float(values[m]).is_integer() else round(values[m], 2),
-                    BLUE, fmt, align="right")
-        if key:
-            rows[key] = row
+                v = values[m]
+                put(ws, f"{c}{row}", int(v) if float(v).is_integer() else round(v, 2), BLUE, fmt, align="right")
+        rows[key] = row
         r[0] += 1
         return row
 
-    prev = lambda i: COLS[i - 1]
+    def stock_f(adds_key, churn_ref):
+        return lambda m, c, i, row: (f"={prev(i)}{row}-ROUND({prev(i)}{row}*{churn_ref},0)+{c}{rows[adds_key]}"
+                                     if i else f"={c}{rows[adds_key]}")
 
-    def stock_formula(adds_row, churn_ref):
-        # база: прошлый месяц минус ушедшие плюс новые; ушедших — целое число
-        return lambda m, c, i, row: (f"={prev(i)}{row}-ROUND({prev(i)}{row}*{churn_ref},0)+{c}{adds_row}" if i
-                                     else f"={c}{adds_row}")
+    R = lambda k: rows[k]
 
-    # ── Труд ────────────────────────────────────────────────────────
     section("ТРУД · ИИ-СОТРУДНИКИ")
-    radd = line("Новых компаний за месяц", "шт.", values=run["labor_adds"])
-    ra = line("Активных компаний", "шт.", formula=stock_formula(radd, ref["Отток компаний в месяц"]),
-              fmt="#,##0", key="labor_act")
-    rarpa = line("Средний платёж", "$/мес",
-                 formula=lambda m, c, i, row: (
-                     f"=IF({m}<{ref['Месяц выхода на платящих']},0,"
-                     f"MIN({ref['Средний платёж к мес. 18, $/мес']},"
-                     f"{ref['Средний платёж на старте, $/мес']}+"
-                     f"({ref['Средний платёж к мес. 18, $/мес']}-{ref['Средний платёж на старте, $/мес']})"
-                     f"*({m}-{ref['Месяц выхода на платящих']})/(18-{ref['Месяц выхода на платящих']})))"),
-                 fmt=CUR)
-    pil = [0] * (MON + 1)
-    for m, n in M.BASE["pilots"].items():
-        pil[m] = n
-    rpil = line("Пилотов запущено", "шт.", values=pil)
-    rlab = line("Выручка Труда", "$/мес",
-                formula=lambda m, c, i, row: f"={c}{ra}*{c}{rarpa}+{c}{rpil}*{ref['Цена пилота, $ разово']}",
-                fmt=CUR, key="labor_rev", bold=True)
+    line("labor_adds", "Новых компаний за месяц", "шт.", run["labor_adds"])
+    line("labor_base", "Компаний", "шт.", f=stock_f("labor_adds", ref["labor_churn"]))
+    line("labor_arpa", "Платёж компании", "$/мес", run["labor_arpa"], fmt=CUR)
+    line("pilots", "Пилотов запущено", "шт.", run["pilots"])
+    line("labor_rev", "Выручка Труда", "$/мес",
+         f=lambda m, c, i, row: f"={c}{R('labor_base')}*{c}{R('labor_arpa')}+{c}{R('pilots')}*{ref['pilot_price']}",
+         fmt=CUR, bold=True)
 
-    # ── Личность ────────────────────────────────────────────────────
     section("ЛИЧНОСТЬ · ПЕРСОНАЖИ")
-    rv = line("Визитов на платное предложение", "чел./мес", values=run["ident_visits"])
-    rsa = line("Новых подписчиков за месяц", "чел.",
-               formula=lambda m, c, i, row: f"=ROUND({c}{rv}*{ref['Конверсия посетителя в подписку']},0)")
-    rs = line("Платных подписчиков", "чел.", formula=stock_formula(rsa, ref["Отток подписчиков в месяц"]),
-              key="subs")
-    rsub = line("Выручка подписки", "$/мес",
-                formula=lambda m, c, i, row: f"={c}{rs}*{ref['Цена подписки, $/мес']}", fmt=CUR)
-    rbd = line("Сделок с брендами", "шт./мес", values=run["brand_deals"])
-    rbr = line("Выручка от брендов", "$/мес",
-               formula=lambda m, c, i, row: f"={c}{rbd}*{ref['Средний чек сделки с брендом, $']}",
-               fmt=CUR, key="brand_rev")
+    line("visits", "Визитов на платное предложение", "в мес.", run["visits"])
+    line("subs_adds", "Новых подписчиков", "чел.",
+         f=lambda m, c, i, row: f"=ROUND({c}{R('visits')}*{ref['ident_conversion']},0)")
+    line("subs", "Подписчиков", "чел.", f=stock_f("subs_adds", ref["ident_churn"]))
+    line("subs_rev", "Выручка подписки", "$/мес",
+         f=lambda m, c, i, row: f"={c}{R('subs')}*{ref['ident_price']}", fmt=CUR, bold=True)
+    line("brand_deals", "Сделок с брендами", "шт.", run["brand_deals"])
+    line("brand_rev", "Выручка от брендов", "$/мес",
+         f=lambda m, c, i, row: f"={c}{R('brand_deals')}*{ref['brand_check']}", fmt=CUR, bold=True)
 
-    # ── Капитал ─────────────────────────────────────────────────────
     section("КАПИТАЛ · УЧЁТ РАСХОДОВ НА ИИ")
-    rcadd = line("Новых компаний за месяц", "шт.", values=run["cap_adds"])
-    rc = line("Платящих компаний", "шт.", formula=stock_formula(rcadd, ref["Отток компаний в месяц2"]),
-              fmt="#,##0", key="cap_act")
-    rcarpa = line("Средний платёж", "$/мес",
-                  formula=lambda m, c, i, row: (
-                      f"=IF({m}<3,0,MIN({ref['Средний платёж к мес. 18, $/мес2']},"
-                      f"{ref['Средний платёж на старте, $/мес2']}+"
-                      f"({ref['Средний платёж к мес. 18, $/мес2']}-{ref['Средний платёж на старте, $/мес2']})"
-                      f"*({m}-3)/15))"),
-                  fmt=CUR)
-    rcap = line("Выручка Капитала", "$/мес",
-                formula=lambda m, c, i, row: f"={c}{rc}*{c}{rcarpa}", fmt=CUR, bold=True)
+    line("cap_adds", "Новых компаний за месяц", "шт.", run["cap_adds"])
+    line("cap_base", "Компаний", "шт.", f=stock_f("cap_adds", ref["cap_churn"]))
+    line("cap_arpa", "Платёж компании", "$/мес", run["cap_arpa"], fmt=CUR)
+    line("cap_rev", "Выручка Капитала", "$/мес",
+         f=lambda m, c, i, row: f"={c}{R('cap_base')}*{c}{R('cap_arpa')}", fmt=CUR, bold=True)
 
-    # ── Итог ────────────────────────────────────────────────────────
     section("ВЫРУЧКА")
-    rrev = line("Выручка всего", "$/мес",
-                formula=lambda m, c, i, row: f"={c}{rlab}+{c}{rsub}+{c}{rbr}+{c}{rcap}",
-                fmt=CUR, key="revenue", bold=True)
-    line("ARR (без брендов и пилотов)", "$",
-         formula=lambda m, c, i, row: f"=({c}{rlab}-{c}{rpil}*{ref['Цена пилота, $ разово']}+{c}{rsub}+{c}{rcap})*12",
-         fmt=CUR, key="arr")
+    line("revenue", "Выручка всего", "$/мес",
+         f=lambda m, c, i, row: f"={c}{R('labor_rev')}+{c}{R('subs_rev')}+{c}{R('brand_rev')}+{c}{R('cap_rev')}",
+         fmt=CUR, bold=True)
+    line("labor_arr", "ARR Труда (без пилотов)", "$",
+         f=lambda m, c, i, row: f"=({c}{R('labor_rev')}-{c}{R('pilots')}*{ref['pilot_price']})*12", fmt=CUR)
+    line("arr", "ARR группы (без брендов и пилотов)", "$",
+         f=lambda m, c, i, row: f"={c}{R('labor_arr')}+({c}{R('subs_rev')}+{c}{R('cap_rev')})*12", fmt=CUR, bold=True)
 
-    # ── Расходы ─────────────────────────────────────────────────────
-    section("РАСХОДЫ И ДЕНЬГИ")
-    rf = line("Штат", "ставок", values=run["fte"], key="fte")
-    rp = line("ФОТ", "$/мес",
-              formula=lambda m, c, i, row: f"={c}{rf}*{ref['Полная стоимость ставки, $/год']}/12", fmt=CUR)
-    rcost = line("Расход всего", "$/мес", values=run["costs"], fmt=CUR, key="costs")
-    line("В том числе всё, кроме людей", "$/мес",
-         formula=lambda m, c, i, row: f"={c}{rcost}-{c}{rp}", fmt=CUR)
-    rnet = line("Чистый поток", "$/мес",
-                formula=lambda m, c, i, row: f"={c}{rrev}-{c}{rcost}", fmt=CUR, key="net", bold=True)
-    line("Деньги на счету", "$",
-         formula=lambda m, c, i, row: (f"={prev(i)}{row}+{c}{rnet}" if i
-                                       else f"={ref['Раунд, $']}+{c}{rnet}"),
-         fmt=CUR, key="cash", bold=True)
+    section("СЕБЕСТОИМОСТЬ")
+    line("cogs", "Себестоимость", "$/мес",
+         f=lambda m, c, i, row: (f"={c}{R('labor_rev')}*{ref['cogs_labor']}+{c}{R('subs_rev')}*{ref['cogs_subs']}"
+                                 f"+{c}{R('brand_rev')}*{ref['cogs_brand']}+{c}{R('cap_rev')}*{ref['cogs_cap']}"),
+         fmt=CUR)
+    line("gross", "Валовая прибыль", "$/мес",
+         f=lambda m, c, i, row: f"={c}{R('revenue')}-{c}{R('cogs')}", fmt=CUR, bold=True)
 
-    # сверка: расход по месяцам должен складываться в бюджет этапа
-    r[0] += 1
-    put(ws, f"A{r[0]}", "Сверка с бюджетом этапов (должно быть 0)", BOLD)
-    r[0] += 1
-    for k, (first, last, _) in enumerate(M.BASE["stages"]):
-        label = f"Этап {k + 1}, мес. {first}–{last}, $"
-        c0, c1 = COLS[first - 1], COLS[last - 1]
-        put(ws, f"A{r[0]}", f"Этап {k + 1}: расход по месяцам минус бюджет", BLACK)
-        put(ws, f"B{r[0]}", "$", NOTE)
-        put(ws, f"C{r[0]}", f"=SUM({c0}{rcost}:{c1}{rcost})-{ref[label]}", BLACK, CUR, align="right")
-        r[0] += 1
+    section("ОПЕРАЦИОННЫЕ РАСХОДЫ")
+    line("fte", "Штат", "ставок", run["fte"])
+    line("payroll", "ФОТ", "$/мес",
+         f=lambda m, c, i, row: f"={c}{R('fte')}*{ref['fte_cost_year']}/12", fmt=CUR)
+    line("hiring", "Найм", "$/мес",
+         f=lambda m, c, i, row: (f"=MAX(0,{c}{R('fte')}-{prev(i)}{R('fte')})*{ref['hire_cost']}" if i else "=0"),
+         fmt=CUR)
+    line("commissions", "Комиссии продажам", "$/мес",
+         f=lambda m, c, i, row: f"={c}{R('labor_adds')}*{c}{R('labor_arpa')}*12*{ref['commission']}", fmt=CUR)
+    line("acquisition", "Привлечение клиентов", "$/мес",
+         f=lambda m, c, i, row: (f"={c}{R('labor_adds')}*{ref['cac_labor']}+{c}{R('cap_adds')}*{ref['cac_cap']}"
+                                 f"+{c}{R('visits')}*{ref['cost_per_visit']}"), fmt=CUR)
+    line("fixed", "Контент, платформа, юрлица", "$/мес",
+         f=lambda m, c, i, row: f"={ref['content_monthly']}+{ref['platform_monthly']}+{ref['legal_monthly']}", fmt=CUR)
+    line("ga", "Офис, поездки, софт", "$/мес",
+         f=lambda m, c, i, row: f"={c}{R('payroll')}*{ref['ga_pct']}", fmt=CUR)
+    line("opex", "Операционные всего", "$/мес",
+         f=lambda m, c, i, row: f"=SUM({c}{R('payroll')}:{c}{R('ga')})", fmt=CUR, bold=True)
+
+    section("ПРИБЫЛЬ И ДЕНЬГИ")
+    line("costs", "Расходы всего", "$/мес",
+         f=lambda m, c, i, row: f"={c}{R('cogs')}+{c}{R('opex')}", fmt=CUR)
+    line("ebitda", "EBITDA", "$/мес",
+         f=lambda m, c, i, row: f"={c}{R('gross')}-{c}{R('opex')}", fmt=CUR, bold=True)
+    line("cash", "Деньги на счету", "$",
+         f=lambda m, c, i, row: (f"={prev(i)}{row}+{c}{R('ebitda')}" if i
+                                 else f"={ref['raise_total']}+{c}{R('ebitda')}"), fmt=CUR, bold=True)
+    last = COLS[-1]
+    line("in_plus", "В плюсе с этого месяца до конца", "1 = да",
+         f=lambda m, c, i, row: f'=IF(COUNTIF({c}{R("ebitda")}:{last}{R("ebitda")},"<0")=0,1,0)')
+
+    section("ОЦЕНКА — ПРОМЕЖУТОЧНЫЙ РЕЗУЛЬТАТ")
+    line("valuation", "Оценка по мультипликаторам", "$",
+         f=lambda m, c, i, row: (f"={c}{R('labor_arr')}*{ref['mult_labor']}"
+                                 f"+{c}{R('cap_rev')}*12*{ref['mult_cap']}"
+                                 f"+{c}{R('subs_rev')}*12*{ref['mult_subs']}"
+                                 f"+SUM({COLS[max(0, i - 11)]}{R('brand_rev')}:{c}{R('brand_rev')})*{ref['mult_brand']}"),
+         fmt=CUR, bold=True)
     return rows
 
 
-def build_checks(ws, rows, model_sheet="Модель"):
+# ─────────────────────────────────────────────────────────────────────
+# Годы, оценка, проверки
+# ─────────────────────────────────────────────────────────────────────
+
+def build_years(ws, rows):
+    ws.column_dimensions["A"].width = 38
+    for col in "BCD":
+        ws.column_dimensions[col].width = 16
+    put(ws, "A1", "Отчёт о прибылях по годам · базовый сценарий", TITLE)
+    put(ws, "A2", "Суммы по листу «Модель». До налогов, без капитальных затрат.", NOTE)
+    header(ws, "ABCD", ["$", "Год 1", "Год 2", "Год 3"])
+
+    def s(key):
+        return [f"=SUM(Модель!{c0}{rows[key]}:{c1}{rows[key]})" for c0, c1 in YEARS]
+
+    lines = [
+        ("Труд", s("labor_rev"), False), ("Личность: подписка", s("subs_rev"), False),
+        ("Личность: бренды", s("brand_rev"), False), ("Капитал", s("cap_rev"), False),
+        ("Выручка", s("revenue"), True), ("Себестоимость", s("cogs"), False),
+        ("Валовая прибыль", s("gross"), True), ("ФОТ", s("payroll"), False), ("Найм", s("hiring"), False),
+        ("Комиссии продажам", s("commissions"), False), ("Привлечение клиентов", s("acquisition"), False),
+        ("Контент, платформа, юрлица", s("fixed"), False), ("Офис, поездки, софт", s("ga"), False),
+        ("Операционные всего", s("opex"), True), ("EBITDA", s("ebitda"), True),
+        ("Касса на конец года", [f"=Модель!{c1}{rows['cash']}" for _, c1 in YEARS], True),
+    ]
+    at = {}
+    r = 5
+    for label, formulas, bold in lines:
+        put(ws, f"A{r}", label, BOLD if bold else BLACK)
+        for col, fml in zip("BCD", formulas):
+            put(ws, f"{col}{r}", fml, GREEN, CUR, align="right")
+        at[label] = r
+        r += 1
+    for label, num, den in (("Валовая маржа", "Валовая прибыль", "Выручка"), ("Маржа EBITDA", "EBITDA", "Выручка")):
+        put(ws, f"A{r}", label)
+        for col in "BCD":
+            put(ws, f"{col}{r}", f"=IF({col}{at[den]}=0,0,{col}{at[num]}/{col}{at[den]})", BLACK, PCT, align="right")
+        r += 1
+
+
+def build_valuation(ws, rows):
+    ws.column_dimensions["A"].width = 12
+    for col in "BCDE":
+        ws.column_dimensions[col].width = 20
+    put(ws, "A1", "Оценка как промежуточный результат", TITLE)
+    put(ws, "A2", "Оценка = ARR направлений × мультипликаторы с листа «Рычаги» + выручка брендов за 12 месяцев. "
+                  "Мультипликаторы — допущение, их назначит рынок.", NOTE)
+    header(ws, "ABCDE", ["Месяц", "ARR группы", "Оценка", "Для $1 млрд нужно", "Оценка / $1 млрд"])
+    r = 5
+    for m in (12, 18, 24, 30, 36):
+        c = COLS[m - 1]
+        put(ws, f"A{r}", m, BLACK, NUM, align="center")
+        put(ws, f"B{r}", f"=Модель!{c}{rows['arr']}", GREEN, CUR, align="right")
+        put(ws, f"C{r}", f"=Модель!{c}{rows['valuation']}", GREEN, CUR, align="right")
+        put(ws, f"D{r}", f"=IF(B{r}=0,0,1000000000/B{r})", BLACK, MULT, align="right")
+        put(ws, f"E{r}", f"=C{r}/1000000000", BLACK, PCT, align="right")
+        r += 1
+
+
+def build_checks(ws, rows):
     ws.column_dimensions["A"].width = 46
     for col in "BCD":
         ws.column_dimensions[col].width = 20
-    put(ws, "A1", "Сходимость со стратегией", TITLE)
-    put(ws, "A2", "Модель считает по своим формулам, колонка «В стратегии» — то, что написано "
-                  "в target-state-18m.md и деке v10. «Не меньше» — цель со знаком «+», "
-                  "засчитывается от 85%. Расхождение означает, что в одном из двух мест "
-                  "цифру надо поправить.", NOTE)
-    for col, name in (("A", "Что сверяем"), ("B", "В стратегии"), ("C", "В модели"), ("D", "Сходится")):
-        put(ws, f"{col}4", name, HEAD, fill=DARK)
+    put(ws, "A1", "Итоги и сверка со стратегией", TITLE)
+    put(ws, "A2", "Итоги считаются по листу «Модель». Сверка — с target-state-18m.md и декой v10 на 18-й месяц.", NOTE)
+    header(ws, "ABCD", ["Показатель", "В стратегии", "В модели", "Сходится"])
 
-    def cell(key, month):
-        return f"{model_sheet}!{COLS[month - 1]}{rows[key]}"
+    last = COLS[-1]
+    rng = lambda key: f"Модель!{COLS[0]}{rows[key]}:{last}{rows[key]}"
+    cell = lambda key, m: f"Модель!{COLS[m - 1]}{rows[key]}"
 
-    # (подпись, план, формула модели, формат, допуск; None — «не меньше»)
-    checks = [
-        ("ARR группы в 18-м месяце", 42_000_000, f"={cell('arr', 18)}", CUR, 1_500_000),
-        ("Выручка 18-го месяца без брендов", 3_600_000, f"={cell('revenue', 18)}-{cell('brand_rev', 18)}", CUR, 300_000),
-        ("Выручка 18-го месяца с брендами", 3_600_000, f"={cell('revenue', 18)}", CUR, 300_000),
-        ("Расход 18-го месяца", 4_000_000, f"={cell('costs', 18)}", CUR, 300_000),
-        ("Чистый поток 18-го месяца", -350_000, f"={cell('net', 18)}", CUR, 300_000),
-        ("Деньги на счету в 18-м месяце", 21_000_000, f"={cell('cash', 18)}", CUR, 2_000_000),
-        ("Труд: база в мес. 6, не меньше", 10, f"={cell('labor_act', 6)}", NUM, None),
-        ("Труд: база в мес. 15, не меньше", 100, f"={cell('labor_act', 15)}", NUM, None),
-        ("Труд: база в мес. 18", 157, f"={cell('labor_act', 18)}", NUM, 5),
-        ("Капитал: база в мес. 6, не меньше", 10, f"={cell('cap_act', 6)}", NUM, None),
-        ("Капитал: база в мес. 15, не меньше", 170, f"={cell('cap_act', 15)}", NUM, None),
-        ("Капитал: база в мес. 18", 256, f"={cell('cap_act', 18)}", NUM, 10),
-        ("Личность: подписчиков в мес. 18", 63_500, f"={cell('subs', 18)}", NUM, 2_000),
-        ("Штат к 18-му месяцу", 135, f"={cell('fte', 18)}", NUM, 5),
-    ]
     r = 5
-    for label, plan, formula, fmt, tol in checks:
-        put(ws, f"A{r}", label, BLACK)
+    put(ws, f"A{r}", "ИТОГИ", BOLD, fill=GREY)
+    r += 1
+    for label, fml, fmt in (
+        ("Выход в устойчивый плюс, месяц", f'=IFERROR(MATCH(1,{rng("in_plus")},0),"нет за 36 мес.")', NUM),
+        ("Дно кассы, $", f"=MIN({rng('cash')})", CUR),
+        ("Месяц дна кассы", f"=MATCH(MIN({rng('cash')}),{rng('cash')},0)", NUM),
+        ("Касса к 36-му месяцу, $", f"={cell('cash', MON)}", CUR),
+        ("Оценка к 36-му месяцу, $", f"={cell('valuation', MON)}", CUR),
+    ):
+        put(ws, f"A{r}", label)
+        put(ws, f"C{r}", fml, GREEN, fmt, align="right")
+        r += 1
+
+    r += 1
+    put(ws, f"A{r}", "СВЕРКА НА 18-Й МЕСЯЦ", BOLD, fill=GREY)
+    r += 1
+    checks = [
+        ("ARR группы", 42_000_000, f"={cell('arr', 18)}", CUR, 1_500_000),
+        ("Выручка 18-го месяца", 3_600_000, f"={cell('revenue', 18)}", CUR, 400_000),
+        ("Расход 18-го месяца", 4_000_000, f"={cell('costs', 18)}", CUR, 400_000),
+        ("Деньги на счету", 21_000_000, f"={cell('cash', 18)}", CUR, 2_000_000),
+        ("Труд: компаний", 157, f"={cell('labor_base', 18)}", NUM, 5),
+        ("Капитал: компаний", 256, f"={cell('cap_base', 18)}", NUM, 10),
+        ("Личность: подписчиков", 63_500, f"={cell('subs', 18)}", NUM, 2_000),
+        ("Штат", 135, f"={cell('fte', 18)}", NUM, 5),
+    ]
+    for (first, last_m, total), k in zip(M.BASE["stages"], range(1, 5)):
+        checks.append((f"Расходы этапа {k}, мес. {first}–{last_m}", total,
+                       f"=SUM(Модель!{COLS[first - 1]}{rows['costs']}:{COLS[last_m - 1]}{rows['costs']})", CUR,
+                       total * 0.15))
+    for label, plan, fml, fmt, tol in checks:
+        put(ws, f"A{r}", label)
         put(ws, f"B{r}", plan, BLUE, fmt, align="right")
-        put(ws, f"C{r}", formula, GREEN, fmt, align="right")
-        test = (f'=IF(C{r}>=B{r}*0.85,"да","НЕТ")' if tol is None
-                else f'=IF(ABS(C{r}-B{r})<={tol},"да","НЕТ")')
-        put(ws, f"D{r}", test, BOLD, align="center")
+        put(ws, f"C{r}", fml, GREEN, fmt, align="right")
+        put(ws, f"D{r}", f'=IF(ABS(C{r}-B{r})<={tol},"да","НЕТ")', BOLD, align="center")
         for col in "ABCD":
             ws[f"{col}{r}"].border = THIN
         r += 1
-    put(ws, f"A{r + 1}", "Допуск для точных целей — в формуле колонки «Сходится», под порядок величины.", NOTE)
+    put(ws, f"A{r + 1}", "Допуск — в формуле колонки «Сходится», под порядок величины. "
+                         "Расходы этапов сверяются с допуском 15%.", NOTE)
 
 
 def main():
-    run = M.build(M.BASE, 1.0)
+    run = M.build(M.BASE)
     wb = Workbook()
-
-    ws_l = wb.active
-    ws_l.title = "Рычаги"
-    order = build_levers(ws_l)
-    # у Труда и Капитала одинаковые подписи рычагов — второй по порядку получает суффикс 2
-    ref = {}
-    for k, v in order:
-        ref[k + "2" if k in ref else k] = v
-
-    ws_m = wb.create_sheet("Модель")
-    rows = build_model(ws_m, run, ref)
-
-    ws_c = wb.create_sheet("Проверки")
-    build_checks(ws_c, rows)
-
-    path = HERE / "finmodel-wif.xlsx"
-    wb.save(path)
-    print("записан", path.name)
+    ws = wb.active
+    ws.title = "Рычаги"
+    ref = build_levers(ws)
+    rows = build_model(wb.create_sheet("Модель"), run, ref)
+    build_years(wb.create_sheet("Годы"), rows)
+    build_valuation(wb.create_sheet("Оценка"), rows)
+    build_checks(wb.create_sheet("Проверки"), rows)
+    wb.save(HERE / "finmodel-wif.xlsx")
+    print("записан finmodel-wif.xlsx")
 
 
 if __name__ == "__main__":
