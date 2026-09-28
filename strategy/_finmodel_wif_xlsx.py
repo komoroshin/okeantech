@@ -116,7 +116,8 @@ def build_model(ws, run, ref):
 
     put(ws, "A1", "Модель по месяцам · базовый сценарий", TITLE)
     put(ws, "A2", "Синие строки — вводные: поток новых клиентов (план продаж), визиты, штат, "
-                  "расход. Всё остальное — формулы: база = прошлый месяц × (1 − отток) + новые. "
+                  "расход. Всё остальное — формулы: база = прошлый месяц − ROUND(прошлый × отток) + новые, "
+                  "все штуки целые. "
                   "Поменяй поток или отток — пересчитается выручка, касса и проверки.", NOTE)
     put(ws, "A4", "Месяц", HEAD, fill=DARK)
     put(ws, "B4", "Единица", HEAD, fill=DARK)
@@ -142,7 +143,8 @@ def build_model(ws, run, ref):
             if formula:
                 put(ws, f"{col}{row}", formula(m, col, i, row), BLACK, fmt, align="right")
             else:
-                put(ws, f"{col}{row}", round(values[m], 4), BLUE, fmt, align="right")
+                put(ws, f"{col}{row}", int(values[m]) if float(values[m]).is_integer() else round(values[m], 2),
+                    BLUE, fmt, align="right")
         if key:
             rows[key] = row
         r[0] += 1
@@ -151,13 +153,13 @@ def build_model(ws, run, ref):
     prev = lambda i: COLS[i - 1]
 
     def stock_formula(adds_row, churn_ref):
-        # база: прошлый месяц минус отток плюс новые; в первом месяце — только новые
-        return lambda m, c, i, row: (f"={prev(i)}{row}*(1-{churn_ref})+{c}{adds_row}" if i
+        # база: прошлый месяц минус ушедшие плюс новые; ушедших — целое число
+        return lambda m, c, i, row: (f"={prev(i)}{row}-ROUND({prev(i)}{row}*{churn_ref},0)+{c}{adds_row}" if i
                                      else f"={c}{adds_row}")
 
     # ── Труд ────────────────────────────────────────────────────────
     section("ТРУД · ИИ-СОТРУДНИКИ")
-    radd = line("Новых компаний за месяц", "шт.", values=run["labor_adds"], fmt="0.0")
+    radd = line("Новых компаний за месяц", "шт.", values=run["labor_adds"])
     ra = line("Активных компаний", "шт.", formula=stock_formula(radd, ref["Отток компаний в месяц"]),
               fmt="#,##0", key="labor_act")
     rarpa = line("Средний платёж", "$/мес",
@@ -180,19 +182,19 @@ def build_model(ws, run, ref):
     section("ЛИЧНОСТЬ · ПЕРСОНАЖИ")
     rv = line("Визитов на платное предложение", "чел./мес", values=run["ident_visits"])
     rsa = line("Новых подписчиков за месяц", "чел.",
-               formula=lambda m, c, i, row: f"={c}{rv}*{ref['Конверсия посетителя в подписку']}")
+               formula=lambda m, c, i, row: f"=ROUND({c}{rv}*{ref['Конверсия посетителя в подписку']},0)")
     rs = line("Платных подписчиков", "чел.", formula=stock_formula(rsa, ref["Отток подписчиков в месяц"]),
               key="subs")
     rsub = line("Выручка подписки", "$/мес",
                 formula=lambda m, c, i, row: f"={c}{rs}*{ref['Цена подписки, $/мес']}", fmt=CUR)
-    rbd = line("Сделок с брендами", "шт./мес", values=run["brand_deals"], fmt="0.0")
+    rbd = line("Сделок с брендами", "шт./мес", values=run["brand_deals"])
     rbr = line("Выручка от брендов", "$/мес",
                formula=lambda m, c, i, row: f"={c}{rbd}*{ref['Средний чек сделки с брендом, $']}",
                fmt=CUR, key="brand_rev")
 
     # ── Капитал ─────────────────────────────────────────────────────
     section("КАПИТАЛ · УЧЁТ РАСХОДОВ НА ИИ")
-    rcadd = line("Новых компаний за месяц", "шт.", values=run["cap_adds"], fmt="0.0")
+    rcadd = line("Новых компаний за месяц", "шт.", values=run["cap_adds"])
     rc = line("Платящих компаний", "шт.", formula=stock_formula(rcadd, ref["Отток компаний в месяц2"]),
               fmt="#,##0", key="cap_act")
     rcarpa = line("Средний платёж", "$/мес",
