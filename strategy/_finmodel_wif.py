@@ -14,6 +14,7 @@
 Запуск: python3 _finmodel_wif.py
 """
 
+import math
 from pathlib import Path
 
 HERE = Path(__file__).parent
@@ -33,9 +34,9 @@ BASE = {
     # запас; остальные запасы — проверка, а не вводная.
 
     # Труд: ИИ-сотрудники
-    "labor_flow": {3: 0, 6: None, 12: 12, 18: 21},   # новых компаний в месяц; None — подбирается
-    "labor_fit": (12, 60),                           # подбор: 60 компаний к мес. 12
-    "labor_checks": {6: 10, 15: 100, 18: 157},       # target-state-18m.md
+    "labor_flow": {3: 0, 6: None, 9: None, 12: 12, 18: 21},  # новых в месяц; None — подбирается
+    "labor_fit": [(6, 6, 10), (9, 12, 60)],          # (опора, месяц цели, база): 10 к мес. 6, 60 к мес. 12
+    "labor_checks": {15: 100, 18: 157},              # target-state-18m.md
     "labor_arpa_start": 5_000,    # $/мес, первый контракт (мес. 6)
     "labor_arpa_end": 15_000,     # $/мес, средний платёж к мес. 18
     "labor_churn": 0.01,          # 1% компаний в месяц
@@ -54,7 +55,7 @@ BASE = {
 
     # Капитал: учёт расходов на ИИ
     "cap_flow": {3: 2, 6: None, 12: 20, 18: 45},     # новых компаний в месяц
-    "cap_fit": (12, 100),                            # подбор: 100 компаний к мес. 12
+    "cap_fit": [(6, 12, 100)],                       # подбор: 100 компаний к мес. 12
     "cap_checks": {6: 10, 15: 170, 18: 256},
     "cap_arpa_start": 800,        # $/мес на старте (допущение)
     "cap_arpa_end": 2_000,        # $/мес к мес. 18
@@ -105,11 +106,25 @@ def flow(anchors, months=MONTHS):
     return out
 
 
+def xround(x):
+    """Округление до целого как у ROUND в Excel: половина — вверх. У Python round() иначе."""
+    return float(math.floor(x + 0.5))
+
+
+def whole(xs):
+    """Штуки — только целые: компания, сделка, подписчик, ставка."""
+    return [xround(x) for x in xs]
+
+
 def stock(adds, churn):
-    """База клиентов: прошлый месяц минус отток плюс новые."""
+    """База: прошлый месяц минус ушедшие плюс новые. Ушедших — целое число, как и всех.
+
+    Отток округляется каждый месяц: при базе 30 и оттоке 1% это 0 компаний,
+    при базе 60 — одна. Так же считает книга: =прошлый-ROUND(прошлый*отток;0)+новые.
+    """
     out = [0.0] * len(adds)
     for m in range(1, len(adds)):
-        out[m] = out[m - 1] * (1 - churn) + adds[m]
+        out[m] = out[m - 1] - xround(out[m - 1] * churn) + adds[m]
     return out
 
 
@@ -121,24 +136,30 @@ def solve(f, target, lo=0.0, hi=1e8):
             lo = mid
         else:
             hi = mid
-    return (lo + hi) / 2
+    return hi   # штуки целые, f ступенчатая: берём первое значение, где цель достигнута
 
 
-def fit_flow(anchors, target_month, target, churn, conversion=1.0):
-    """Подставляет единственную опору None так, чтобы база в target_month = target."""
-    free = [m for m, v in anchors.items() if v is None]
-    assert len(free) == 1, anchors
+def fit_flow(anchors, fits, churn, conversion=1.0):
+    """Подбирает опоры потока (None) по очереди, каждую под свою цель по базе.
 
-    def base_at(v):
-        a = dict(anchors)
-        a[free[0]] = v
-        adds = [x * conversion for x in flow(a)]
-        return stock(adds, churn)[target_month]
+    fits — список (месяц опоры, месяц цели, база). Пока подбирается одна опора,
+    следующие неизвестные держатся на её уровне; цели идут по возрастанию месяца.
+    """
+    a = dict(anchors)
+    for anchor_m, target_m, target in fits:
+        later = [k for k, v in a.items() if v is None and k != anchor_m]
 
-    v = solve(base_at, target)
-    out = dict(anchors)
-    out[free[0]] = v
-    return out
+        def base_at(v, anchor_m=anchor_m, target_m=target_m, later=later):
+            trial = dict(a)
+            trial[anchor_m] = v
+            for k in later:
+                trial[k] = v
+            adds = whole(x * conversion for x in flow(trial))
+            return stock(adds, churn)[target_m]
+
+        a[anchor_m] = solve(base_at, target)
+    assert all(v is not None for v in a.values()), a
+    return a
 
 
 def ramp(start_value, end_value, start_month, end_month, months=MONTHS):
@@ -179,9 +200,9 @@ def build(levers, scale):
     r = {}
 
     # ── Труд ────────────────────────────────────────────────────────
-    anchors = fit_flow(L["labor_flow"], *L["labor_fit"], L["labor_churn"])
+    anchors = fit_flow(L["labor_flow"], L["labor_fit"], L["labor_churn"])
     r["labor_flow_anchors"] = anchors
-    r["labor_adds"] = [x * scale for x in flow(anchors)]
+    r["labor_adds"] = whole(x * scale for x in flow(anchors))
     r["labor_actives"] = stock(r["labor_adds"], L["labor_churn"])
     r["labor_arpa"] = ramp(L["labor_arpa_start"], L["labor_arpa_end"], 6, MONTHS)
     r["labor_rev"] = [r["labor_actives"][m] * r["labor_arpa"][m] for m in range(MONTHS + 1)]
@@ -189,39 +210,21 @@ def build(levers, scale):
         r["labor_rev"][m] += n * L["pilot_price"]
 
     # ── Личность: подписка ──────────────────────────────────────────
-    anchors = dict(L["ident_visits"])
-    for anchor_m, target_m, target in L["ident_fit"]:
-        # опоры подбираются по очереди: сначала мес. 12, потом мес. 15
-        trial = {k: (v if v is not None else 0.0) for k, v in anchors.items()}
-        trial[anchor_m] = None
-        for later in [k for k, v in anchors.items() if v is None and k > anchor_m]:
-            trial[later] = None
-        # последующие неизвестные на время подбора держим на уровне текущей опоры
-        later_free = [k for k, v in trial.items() if v is None and k != anchor_m]
-
-        def base_at(v, trial=trial, later_free=later_free, anchor_m=anchor_m, target_m=target_m):
-            a = dict(trial)
-            a[anchor_m] = v
-            for k in later_free:
-                a[k] = v
-            adds = [x * L["ident_conversion"] for x in flow(a)]
-            return stock(adds, L["ident_churn"])[target_m]
-
-        anchors[anchor_m] = solve(base_at, target)
+    anchors = fit_flow(L["ident_visits"], L["ident_fit"], L["ident_churn"], L["ident_conversion"])
     r["ident_visit_anchors"] = anchors
-    r["ident_visits"] = [x * scale for x in flow(anchors)]
-    r["ident_adds"] = [v * L["ident_conversion"] for v in r["ident_visits"]]
+    r["ident_visits"] = whole(x * scale for x in flow(anchors))
+    r["ident_adds"] = whole(v * L["ident_conversion"] for v in r["ident_visits"])
     r["ident_subs"] = stock(r["ident_adds"], L["ident_churn"])
     r["ident_rev"] = [s * L["ident_price"] for s in r["ident_subs"]]
 
     # ── Личность: бренды ────────────────────────────────────────────
-    r["brand_deals"] = [x * scale for x in flow(L["brand_flow"])]
+    r["brand_deals"] = whole(x * scale for x in flow(L["brand_flow"]))
     r["brand_rev"] = [d * L["brand_check"] for d in r["brand_deals"]]
 
     # ── Капитал ─────────────────────────────────────────────────────
-    anchors = fit_flow(L["cap_flow"], *L["cap_fit"], L["cap_churn"])
+    anchors = fit_flow(L["cap_flow"], L["cap_fit"], L["cap_churn"])
     r["cap_flow_anchors"] = anchors
-    r["cap_adds"] = [x * scale for x in flow(anchors)]
+    r["cap_adds"] = whole(x * scale for x in flow(anchors))
     r["cap_actives"] = stock(r["cap_adds"], L["cap_churn"])
     r["cap_arpa"] = ramp(L["cap_arpa_start"], L["cap_arpa_end"], 3, MONTHS)
     r["cap_rev"] = [r["cap_actives"][m] * r["cap_arpa"][m] for m in range(MONTHS + 1)]
@@ -230,7 +233,7 @@ def build(levers, scale):
     r["revenue"] = [r["labor_rev"][m] + r["ident_rev"][m] + r["brand_rev"][m] + r["cap_rev"][m]
                     for m in range(MONTHS + 1)]
 
-    r["fte"] = flow({0: L["fte_checkpoints"][1], **L["fte_checkpoints"]})
+    r["fte"] = whole(flow({0: L["fte_checkpoints"][1], **L["fte_checkpoints"]}))
     fte_month = L["fte_cost_year"] / 12
     r["payroll"] = [r["fte"][m] * fte_month for m in range(MONTHS + 1)]
     r["costs"] = monthly_costs(L["stages"])
@@ -301,7 +304,9 @@ def main():
     w("Стратегия называет два вида чисел: **сколько клиентов всего** (на мес. 6, 12,\n"
       "15, 18) и **сколько новых в месяц** (на мес. 12 и 18). Модель ведётся от\n"
       "вторых: поток новых клиентов растёт линейно между названными точками, база\n"
-      "считается как «прошлый месяц минус отток плюс новые». Где поток до мес. 12 не\n"
+      "считается как «прошлый месяц минус ушедшие плюс новые». Все штуки целые:\n"
+      "компании, сделки, подписчики и ставки; ушедших каждый месяц округляем до\n"
+      "целых, поэтому при маленькой базе отток бывает нулевым. Где поток до мес. 12 не\n"
       "назван, он подбирается так, чтобы попасть в названную базу на мес. 12.\n"
       "Базы на остальных месяцах — не вводные, а проверка: если поток и отток из\n"
       "стратегии не дают названную базу, значит, в стратегии одна из цифр неверна.\n")
@@ -366,8 +371,8 @@ def main():
     w("| Мес. | Труд: новых | Труд: база | Капитал: новых | Капитал: база | Визитов на оплату | Подписчиков |")
     w("|---|---|---|---|---|---|---|")
     for m in range(3, M18 + 1):
-        w(f"| {m} | {dec(b['labor_adds'][m])} | {fmt_int(b['labor_actives'][m])} | "
-          f"{dec(b['cap_adds'][m])} | {fmt_int(b['cap_actives'][m])} | "
+        w(f"| {m} | {fmt_int(b['labor_adds'][m])} | {fmt_int(b['labor_actives'][m])} | "
+          f"{fmt_int(b['cap_adds'][m])} | {fmt_int(b['cap_actives'][m])} | "
           f"{fmt_int(b['ident_visits'][m] / 1000)} тыс. | {fmt_int(b['ident_subs'][m])} |")
     w("")
 
@@ -439,7 +444,7 @@ def main():
     lin_max = 2 * s4_avg - s3_avg
 
     def cap_at(churn):
-        return stock(flow(b["cap_flow_anchors"]), churn)[M18]
+        return stock(whole(flow(b["cap_flow_anchors"])), churn)[M18]
     cap_churn_fit = solve(lambda c: -cap_at(c), -256, 0.0, 0.5)
 
     w("## Что не сходится и почему\n")
@@ -482,8 +487,8 @@ def main():
       f"тогда он должен стоять в модели и в ответах инвестору.\n")
 
     got_subs = b["ident_subs"][M18]
-    need_v = solve(lambda v: stock([x * L["ident_conversion"] for x in
-                                    flow({**b["ident_visit_anchors"], 18: v})],
+    need_v = solve(lambda v: stock(whole(x * L["ident_conversion"] for x in
+                                         flow({**b["ident_visit_anchors"], 18: v})),
                                    L["ident_churn"])[M18], 63_500)
     w(f"**4. Личность: 1,6 млн визитов дают {fmt_int(got_subs)} подписчиков, а не 63,5 тыс.** "
       f"Чтобы попасть в базы 10 тыс. и 25 тыс. на мес. 12 и 15, визиты должны расти "
@@ -499,7 +504,8 @@ def main():
       f"базы клиентов с экспонентой между контрольными точками, без учёта потоков, "
       f"которые стратегия тоже называет. Счёт от потока поменял картину в трёх "
       f"местах. Снято: «Труду нужно 25 новых компаний в месяц, а не 21» — это был "
-      f"артефакт экспоненты; при линейном потоке 12 → 21 выходит ровно 157. "
+      f"артефакт экспоненты; при линейном потоке 12 → 21 выходит "
+      f"{fmt_int(b['labor_actives'][M18])} компаний при цели 157. "
       f"Подтвердилось: Личности нужно около {dec(need_v / 1e6)} млн визитов, первая "
       f"версия давала 2,1 млн. Найдено заново: Капитал, который первая версия "
       f"считала сходящимся, — она не видела, что поток и база в стратегии "
